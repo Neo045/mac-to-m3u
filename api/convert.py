@@ -325,8 +325,16 @@ class handler(BaseHTTPRequestHandler):
         epg_url    = (payload.get("epgUrl")    or "").strip()
         fmt        = (payload.get("format")    or "m3u").lower()
         skip_known = (payload.get("skipKnown") or "").strip()
-        category_id = payload.get("categoryId")
-        category_type = payload.get("categoryType")
+        category_ids = payload.get("categoryIds") or []
+        # Backward compatibility with the former single-category request.
+        if not category_ids and payload.get("categoryId"):
+            category_ids = [{"id": payload.get("categoryId"), "mediaType": payload.get("categoryType") or ""}]
+        if not isinstance(category_ids, list):
+            category_ids = []
+        category_ids = [c for c in category_ids if isinstance(c, dict) and c.get("id") not in (None, "")]
+        categories_by_type = {}
+        for category in category_ids:
+            categories_by_type.setdefault(str(category.get("mediaType") or ""), []).append(str(category.get("id")))
 
         if not portal or not mac:
             return self.send_json(400, {"error": "Missing required fields: portal, mac"})
@@ -368,7 +376,12 @@ class handler(BaseHTTPRequestHandler):
             all_channels, errors = [], []
             for t in types:
                 try:
-                    all_channels.extend(fetch_all(portal, mac, token, t, max_pgs, known_urls, category_id if category_type == t else "*"))
+                    selected_ids = categories_by_type.get(t, [])
+                    if selected_ids:
+                        for selected_id in selected_ids:
+                            all_channels.extend(fetch_all(portal, mac, token, t, max_pgs, known_urls, selected_id))
+                    else:
+                        all_channels.extend(fetch_all(portal, mac, token, t, max_pgs, known_urls, "*"))
                 except Exception as e:
                     errors.append(f"{t}: {e}")
             if not all_channels and errors:
@@ -397,52 +410,49 @@ class handler(BaseHTTPRequestHandler):
             seen      = set()
             type_sent = 0
 
-            page = 1
-            while page <= max_pgs:
-                try:
-                    items, total_items = fetch_page(portal, mac, token, media_type, page, category_id if category_type == media_type else "*")
-                except Exception as e:
-                    err_msg = str(e)
-                    errors.append(f"{media_type} p{page}: {err_msg}")
-                    self.emit({"event": "error", "scope": media_type,
-                               "message": err_msg, "page": page})
-                    break
+            selected_ids = categories_by_type.get(media_type, [])
+            category_runs = selected_ids or ["*"]
+            for selected_id in category_runs:
+                page = 1
+                while page <= max_pgs:
+                    try:
+                        items, total_items = fetch_page(portal, mac, token, media_type, page, selected_id)
+                    except Exception as e:
+                        err_msg = str(e)
+                        errors.append(f"{media_type} category {selected_id} p{page}: {err_msg}")
+                        self.emit({"event": "error", "scope": media_type,
+                                   "message": err_msg, "page": page})
+                        break
 
-                # Refine estimate from real portal total
-                if total_items:
-                    estimated_total = max(estimated_total, sent + total_items)
+                    if total_items:
+                        estimated_total = max(estimated_total, sent + total_items)
+                    if not items:
+                        break
 
-                if not items:
-                    break
+                    for ch in items:
+                        cid = str(ch.get("id", "") or ch.get("cmd", ""))
+                        if cid in seen:
+                            continue
+                        seen.add(cid)
+                        built = build_channel(ch, genres, media_type,
+                                              portal, mac, token, known_urls, sent + 1)
+                        if not built:
+                            continue
+                        sent += 1
+                        type_sent += 1
+                        self.emit({"event": "channel", "count": sent, "channel": built})
 
-                for ch in items:
-                    cid = str(ch.get("id", "") or ch.get("cmd", ""))
-                    if cid in seen:
-                        continue
-                    seen.add(cid)
-                    built = build_channel(ch, genres, media_type,
-                                          portal, mac, token, known_urls, sent + 1)
-                    if not built:
-                        continue
-                    sent      += 1
-                    type_sent += 1
-                    self.emit({"event": "channel", "count": sent, "channel": built})
+                    self.emit({
+                        "event": "progress", "scope": media_type,
+                        "page": page, "count": sent, "typeCount": type_sent,
+                        "estimatedTotal": estimated_total, "done": False,
+                    })
+                    page += 1
 
-                self.emit({
-                    "event":          "progress",
-                    "scope":          media_type,
-                    "page":           page,
-                    "count":          sent,
-                    "typeCount":      type_sent,
-                    "estimatedTotal": estimated_total,
-                    "done":           False,
-                })
-                page += 1
-
-            if page > max_pgs:
-                msg = f"Safety limit reached at {max_pgs} pages for {media_type}; results may be incomplete."
-                errors.append(msg)
-                self.emit({"event": "error", "scope": media_type, "message": msg, "page": page - 1})
+                if page > max_pgs:
+                    msg = f"Safety limit reached at {max_pgs} pages for {media_type} category {selected_id}; results may be incomplete."
+                    errors.append(msg)
+                    self.emit({"event": "error", "scope": media_type, "message": msg, "page": page - 1})
 
             # Signal end-of-type
             self.emit({
