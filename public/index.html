@@ -63,10 +63,10 @@ input[type=range]{flex:1;accent-color:var(--primary);height:4px;cursor:pointer}
 .category-load:active{transform:translateY(0)}
 .category-load .cat-icon{font-size:17px;line-height:1}
 .category-select-wrap{position:relative}
-.category-select-wrap:after{content:'⌄';position:absolute;right:15px;top:50%;transform:translateY(-58%);font-size:19px;color:var(--primary);pointer-events:none}
-#categorySelect{appearance:none;-webkit-appearance:none;width:100%;min-height:48px;padding:0 42px 0 13px!important;border:1px solid var(--border);border-radius:10px;background:var(--entry);color:var(--text);font:500 13px 'Inter',sans-serif;outline:none;transition:border-color .18s,box-shadow .18s;cursor:pointer}
+.category-select-wrap:after{display:none;content:'⌄';position:absolute;right:15px;top:50%;transform:translateY(-58%);font-size:19px;color:var(--primary);pointer-events:none}
+#categorySelect{min-height:140px;appearance:none;-webkit-appearance:none;width:100%;min-height:48px;padding:0 42px 0 13px!important;border:1px solid var(--border);border-radius:10px;background:var(--entry);color:var(--text);font:500 13px 'Inter',sans-serif;outline:none;transition:border-color .18s,box-shadow .18s;cursor:pointer}
 #categorySelect:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-dim)}
-#categorySelect:disabled{opacity:.58;cursor:not-allowed}
+#categorySelect:disabled{opacity:.58;cursor:not-allowed}#categorySelect option{padding:8px 10px;border-radius:6px}#categorySelect option:checked{background:var(--primary);color:#fff}
 .category-help{display:flex;align-items:flex-start;gap:8px;margin:10px 2px 0!important;font-size:11px!important;line-height:1.55;color:var(--muted)!important}
 .category-help .help-icon{color:var(--primary);font-size:14px;flex:0 0 auto}
 .category-count{display:none;align-items:center;gap:5px;font-size:10px;font-weight:600;color:var(--success);background:color-mix(in oklch,var(--success) 12%,transparent);border:1px solid color-mix(in oklch,var(--success) 25%,transparent);padding:4px 8px;border-radius:20px;white-space:nowrap}
@@ -331,12 +331,12 @@ tr:hover td{background:var(--surf2)}
         <span class="cat-icon" aria-hidden="true">▦</span><span>Load categories</span>
       </button>
       <div class="category-select-wrap">
-        <select id="categorySelect" disabled aria-label="Choose a category">
+        <select id="categorySelect" disabled multiple aria-label="Choose one or more categories">
           <option value="">All categories</option>
         </select>
       </div>
     </div>
-    <p class="category-help"><span class="help-icon" aria-hidden="true">ⓘ</span><span id="categoryHelpText">Enter your Portal URL and MAC, then load categories. Choose one to export only its channels, or keep “All categories”.</span></p>
+    <p class="category-help"><span class="help-icon" aria-hidden="true">ⓘ</span><span id="categoryHelpText">Enter your Portal URL and MAC, then load categories. Choose one or more categories to export only their channels, or keep “All categories”.</span></p>
   </div>
   <div class="field">
     <label>Pagination</label>
@@ -643,11 +643,11 @@ function getInputs(){
   const types=[$('chkLive').checked&&'live',$('chkVod').checked&&'vod',$('chkSeries').checked&&'series'].filter(Boolean);
   const maxPages=10000; // safety ceiling; pagination stops on an empty page
   const skipKnown=recheckChk.checked?($('recheckM3u').value||''):'';
-  const selectedCategory=$('categorySelect')?.value||'';
-  const selectedOption=selectedCategory?$('categorySelect').selectedOptions[0]:null;
-  const categoryType=selectedOption?.dataset.mediaType||'';
-  const effectiveTypes=selectedCategory&&categoryType?[categoryType]:types;
-  return{portal,mac,epg,types:effectiveTypes,maxPages,skipKnown,categoryId:selectedCategory,categoryType};
+  const selectedOptions=[...($('categorySelect')?.selectedOptions||[])].filter(o=>o.value);
+  const categoryIds=selectedOptions.map(o=>({id:o.value,mediaType:o.dataset.mediaType||''}));
+  const categoryTypes=[...new Set(categoryIds.map(c=>c.mediaType).filter(Boolean))];
+  const effectiveTypes=categoryIds.length?categoryTypes:types;
+  return{portal,mac,epg,types:effectiveTypes,maxPages,skipKnown,categoryIds};
 }
 function validateInputs(){
   const{portal,mac,types}=getInputs();
@@ -741,6 +741,16 @@ function renderInspector(data){
 });
 
 // ── Load portal categories ────────────────────────────────────────────────────
+$('categorySelect')?.addEventListener('change',e=>{
+  const sel=e.currentTarget, all=[...sel.options].find(o=>o.value==='');
+  const chosen=[...sel.selectedOptions];
+  if(chosen.some(o=>o.value==='')) {
+    [...sel.options].forEach(o=>{if(o.value!=='')o.selected=false;});
+    if(all) all.selected=true;
+  } else if(all) all.selected=false;
+  const n=[...sel.selectedOptions].filter(o=>o.value).length;
+  $('categoryHelpText').textContent=n?`${n} categories selected. Their channels will be combined into one playlist.`:'No category filter selected; all categories will be included.';
+});
 $('loadCategoriesBtn').addEventListener('click', async () => {
   const {portal,mac,types}=getInputs();
   if(!portal || !mac || !/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(mac)){
@@ -756,7 +766,7 @@ $('loadCategoriesBtn').addEventListener('click', async () => {
       const opt=document.createElement('option'); opt.value=cat.id; opt.dataset.mediaType=cat.mediaType;
       opt.textContent=`${cat.name} (${cat.mediaType.toUpperCase()})`; sel.appendChild(opt);
     }
-    sel.disabled=false; const count=data.categories?.length||0; $('categoryHelpText').textContent=count?`${count} categories loaded. Choose one category to export only its channels, or keep “All categories”.`:'No categories were returned by this portal.'; setStatus(`Loaded ${count} categories. Select one to extract only that category.`,'ok');
+    sel.disabled=false; const count=data.categories?.length||0; $('categoryHelpText').textContent=count?`${count} categories loaded. Select multiple categories (Ctrl/⌘ or tap) to combine them. Keep “All categories” for everything.`:'No categories were returned by this portal.'; setStatus(`Loaded ${count} categories. You can select multiple categories.`,'ok');
     log(`Loaded ${data.categories?.length||0} portal categories.`,'ok');
   }catch(e){setStatus(`Category loading failed: ${e.message}`,'err');log(e.message,'err');}
   finally{btn.disabled=false;btn.innerHTML='<span class="cat-icon" aria-hidden="true">▦</span><span>Load categories</span>';}
@@ -765,7 +775,7 @@ $('loadCategoriesBtn').addEventListener('click', async () => {
 // ── Convert (NDJSON streaming) ────────────────────────────────────────────────
 $('convertBtn').addEventListener('click', async () => {
   if(!validateInputs()) return;
-  const{portal,mac,epg,types,skipKnown,categoryId,categoryType}=getInputs();
+  const{portal,mac,epg,types,skipKnown,categoryIds}=getInputs();
   const maxPages=10000; // backend safety ceiling; normal stopping is an empty portal page.
 
   m3uData=null; filteredM3u=null; lastChannels=[];
@@ -793,7 +803,7 @@ $('convertBtn').addEventListener('click', async () => {
     const res = await fetch('/api/convert',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({portal,mac,types,maxPages,epgUrl:epg,format:'json',skipKnown,categoryId,categoryType}),
+      body:JSON.stringify({portal,mac,types,maxPages,epgUrl:epg,format:'json',skipKnown,categoryIds}),
       signal:abortCtrl.signal,
     });
     if(!res.ok){
