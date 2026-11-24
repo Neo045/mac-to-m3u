@@ -445,13 +445,13 @@ def launch_gui():
     lbl(card, "Max Pages per type")
     pages_row = ttk.Frame(card, style="Card.TFrame")
     pages_row.pack(fill="x")
-    pages_var = tk.IntVar(value=50)
-    pages_lbl = ttk.Label(pages_row, text="50", style="Muted.TLabel", width=4)
+    pages_var = tk.IntVar(value=500)
+    pages_lbl = ttk.Label(pages_row, text="500", style="Muted.TLabel", width=4)
     pages_lbl.pack(side="right")
     def on_pages(v):
         pages_var.set(int(float(v)))
         pages_lbl.configure(text=str(pages_var.get()))
-    scale = ttk.Scale(pages_row, from_=1, to=500, variable=pages_var,
+    scale = ttk.Scale(pages_row, from_=1, to=10000, variable=pages_var,
                       orient="horizontal", command=on_pages)
     scale.pack(side="left", fill="x", expand=True)
 
