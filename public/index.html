@@ -654,7 +654,11 @@ function getInputs(){
   const types=[$('chkLive').checked&&'live',$('chkVod').checked&&'vod',$('chkSeries').checked&&'series'].filter(Boolean);
   const maxPages=10000; // safety ceiling; pagination stops on an empty page
   const skipKnown=recheckChk.checked?($('recheckM3u').value||''):'';
-  const selectedOptions=[...($('categorySelect')?.selectedOptions||[])].filter(o=>o.value);
+  // Keep selections from inactive media types in the UI, but only export
+  // categories belonging to the currently enabled content types.
+  const activeTypes=new Set(types);
+  const selectedOptions=[...($('categorySelect')?.selectedOptions||[])]
+    .filter(o=>o.value&&activeTypes.has((o.dataset.mediaType||'').toLowerCase()));
   const categoryIds=selectedOptions.map(o=>({id:o.value,mediaType:o.dataset.mediaType||''}));
   const categoryTypes=[...new Set(categoryIds.map(c=>c.mediaType).filter(Boolean))];
   const effectiveTypes=categoryIds.length?categoryTypes:types;
@@ -761,7 +765,7 @@ function refreshCategoryTypeVisibility(){
   [...sel.options].forEach(o=>{
     const type=(o.dataset.mediaType||'').toLowerCase();
     o.hidden=!!type&&!allowed.has(type);
-    if(o.hidden)o.selected=false;
+    // Preserve the selected state while switching between Live, VOD and Series.
   });
   updateCategorySelectionUI();
 }
