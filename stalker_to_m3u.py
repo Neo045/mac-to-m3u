@@ -133,7 +133,10 @@ def fetch_all_channels(session, base, mac, token, media_type,
         log_fn(f"  [warn] genres: {e}")
 
     channels, seen, total = [], set(), None
-    for page in range(1, max_pages + 1):
+    # Continue until the portal returns an empty page; retain a safety ceiling.
+    page = 1
+    page_limit = max(1, min(int(max_pages or 10000), 10000))
+    while page <= page_limit:
         if stop_event and stop_event.is_set():
             log_fn("  Cancelled.")
             break
@@ -163,8 +166,9 @@ def fetch_all_channels(session, base, mac, token, media_type,
             })
         pct = f"{len(channels)}/{total}" if total else str(len(channels))
         log_fn(f"  [{media_type.upper()}] page {page} — {pct} channels")
-        if total and len(channels) >= total:
-            break
+        page += 1
+    if page > page_limit:
+        log_fn(f"  [warn] Safety limit reached ({page_limit} pages); results may be incomplete")
     return channels
 
 def build_m3u(channels, epg_url=""):
@@ -441,19 +445,9 @@ def launch_gui():
         ttk.Checkbutton(checks_frame, text=txt, variable=var,
                         style="TCheckbutton").pack(side="left", padx=(0, 16))
 
-    # max pages
-    lbl(card, "Max Pages per type")
-    pages_row = ttk.Frame(card, style="Card.TFrame")
-    pages_row.pack(fill="x")
-    pages_var = tk.IntVar(value=500)
-    pages_lbl = ttk.Label(pages_row, text="500", style="Muted.TLabel", width=4)
-    pages_lbl.pack(side="right")
-    def on_pages(v):
-        pages_var.set(int(float(v)))
-        pages_lbl.configure(text=str(pages_var.get()))
-    scale = ttk.Scale(pages_row, from_=1, to=10000, variable=pages_var,
-                      orient="horizontal", command=on_pages)
-    scale.pack(side="left", fill="x", expand=True)
+    # automatic pagination
+    lbl(card, "Pagination: Automatic (until no more results)")
+    pages_var = tk.IntVar(value=10000)  # safety ceiling, not a normal page limit
 
     # ── action buttons ──
     btn_row = ttk.Frame(root_pad, style="TFrame")
@@ -612,7 +606,7 @@ def launch_gui():
         log(f"Portal : {portal}", "info")
         log(f"MAC    : {mac}",    "info")
         log(f"Types  : {', '.join(types)}", "info")
-        log(f"Pages  : {pages_var.get()} per type\n", "info")
+        log("Pages  : automatic (until portal has no more results)\n", "info")
         set_busy(True)
 
         def target():
