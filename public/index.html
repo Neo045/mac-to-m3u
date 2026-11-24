@@ -52,6 +52,27 @@ input::placeholder{color:var(--faint)}
 .range-row{display:flex;align-items:center;gap:12px}
 input[type=range]{flex:1;accent-color:var(--primary);height:4px;cursor:pointer}
 
+/* premium category picker */
+.category-field{padding:15px;border:1px solid color-mix(in oklch,var(--primary) 28%,var(--border));border-radius:13px;background:linear-gradient(145deg,color-mix(in oklch,var(--primary) 8%,var(--surf)),var(--surf));box-shadow:inset 0 1px 0 color-mix(in oklch,#fff 4%,transparent)}
+.category-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px}
+.category-head label{margin:0}
+.optional-tag{font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);background:var(--surf2);border:1px solid var(--border);border-radius:20px;padding:4px 8px}
+.category-actions{display:grid;grid-template-columns:1fr;gap:9px}
+.category-load{width:100%;min-height:46px;display:flex;align-items:center;justify-content:center;gap:9px;border-radius:10px;font-size:13px;letter-spacing:.01em;background:linear-gradient(135deg,color-mix(in oklch,var(--primary) 18%,var(--surf2)),var(--surf2));border:1px solid color-mix(in oklch,var(--primary) 42%,var(--border));box-shadow:0 3px 10px color-mix(in oklch,var(--primary) 10%,transparent);color:var(--primary)}
+.category-load:not(:disabled):hover{transform:translateY(-1px);box-shadow:0 5px 14px color-mix(in oklch,var(--primary) 16%,transparent)}
+.category-load:active{transform:translateY(0)}
+.category-load .cat-icon{font-size:17px;line-height:1}
+.category-select-wrap{position:relative}
+.category-select-wrap:after{content:'⌄';position:absolute;right:15px;top:50%;transform:translateY(-58%);font-size:19px;color:var(--primary);pointer-events:none}
+#categorySelect{appearance:none;-webkit-appearance:none;width:100%;min-height:48px;padding:0 42px 0 13px!important;border:1px solid var(--border);border-radius:10px;background:var(--entry);color:var(--text);font:500 13px 'Inter',sans-serif;outline:none;transition:border-color .18s,box-shadow .18s;cursor:pointer}
+#categorySelect:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-dim)}
+#categorySelect:disabled{opacity:.58;cursor:not-allowed}
+.category-help{display:flex;align-items:flex-start;gap:8px;margin:10px 2px 0!important;font-size:11px!important;line-height:1.55;color:var(--muted)!important}
+.category-help .help-icon{color:var(--primary);font-size:14px;flex:0 0 auto}
+.category-count{display:none;align-items:center;gap:5px;font-size:10px;font-weight:600;color:var(--success);background:color-mix(in oklch,var(--success) 12%,transparent);border:1px solid color-mix(in oklch,var(--success) 25%,transparent);padding:4px 8px;border-radius:20px;white-space:nowrap}
+.category-count.visible{display:inline-flex}
+@media(max-width:480px){.category-field{padding:13px}.category-head{margin-bottom:10px}.category-load{min-height:48px}}
+
 /* recheck toggle */
 .recheck-toggle{display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
 .recheck-toggle label{text-transform:none;font-size:13px;font-weight:500;letter-spacing:0;color:var(--muted);margin-bottom:0;cursor:pointer}
@@ -300,15 +321,22 @@ tr:hover td{background:var(--surf2)}
       <label><input type="checkbox" id="chkSeries"> Series</label>
     </div>
   </div>
-  <div class="field">
-    <label for="categorySelect">Category extraction <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
-    <div style="display:flex;gap:8px;align-items:center">
-      <button class="btn btn-inspect" type="button" id="loadCategoriesBtn" style="white-space:nowrap">Load Categories</button>
-      <select id="categorySelect" disabled style="flex:1;min-width:0;padding:11px;border:1px solid var(--border);border-radius:9px;background:var(--surf2);color:var(--text)">
-        <option value="">All categories</option>
-      </select>
+  <div class="field category-field">
+    <div class="category-head">
+      <label for="categorySelect">Category extraction</label>
+      <span class="optional-tag">Optional</span>
     </div>
-    <p class="hint">Load categories after entering Portal URL and MAC. Select one category to export only its channels.</p>
+    <div class="category-actions">
+      <button class="btn category-load" type="button" id="loadCategoriesBtn">
+        <span class="cat-icon" aria-hidden="true">▦</span><span>Load categories</span>
+      </button>
+      <div class="category-select-wrap">
+        <select id="categorySelect" disabled aria-label="Choose a category">
+          <option value="">All categories</option>
+        </select>
+      </div>
+    </div>
+    <p class="category-help"><span class="help-icon" aria-hidden="true">ⓘ</span><span id="categoryHelpText">Enter your Portal URL and MAC, then load categories. Choose one to export only its channels, or keep “All categories”.</span></p>
   </div>
   <div class="field">
     <label>Pagination</label>
@@ -723,15 +751,15 @@ $('loadCategoriesBtn').addEventListener('click', async () => {
   try{
     const res=await fetch('/api/convert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({portal,mac,types,format:'categories'})});
     const data=await res.json(); if(!res.ok||!data.ok) throw new Error(data.error||'Could not load categories');
-    const sel=$('categorySelect'); sel.innerHTML='<option value="">All categories</option>';
+    const sel=$('categorySelect'); sel.innerHTML='<option value="">All categories</option>'; 
     for(const cat of (data.categories||[])){
       const opt=document.createElement('option'); opt.value=cat.id; opt.dataset.mediaType=cat.mediaType;
       opt.textContent=`${cat.name} (${cat.mediaType.toUpperCase()})`; sel.appendChild(opt);
     }
-    sel.disabled=false; setStatus(`Loaded ${data.categories?.length||0} categories. Select one to extract only that category.`,'ok');
+    sel.disabled=false; const count=data.categories?.length||0; $('categoryHelpText').textContent=count?`${count} categories loaded. Choose one category to export only its channels, or keep “All categories”.`:'No categories were returned by this portal.'; setStatus(`Loaded ${count} categories. Select one to extract only that category.`,'ok');
     log(`Loaded ${data.categories?.length||0} portal categories.`,'ok');
   }catch(e){setStatus(`Category loading failed: ${e.message}`,'err');log(e.message,'err');}
-  finally{btn.disabled=false;btn.textContent='Load Categories';}
+  finally{btn.disabled=false;btn.innerHTML='<span class="cat-icon" aria-hidden="true">▦</span><span>Load categories</span>';}
 });
 
 // ── Convert (NDJSON streaming) ────────────────────────────────────────────────
