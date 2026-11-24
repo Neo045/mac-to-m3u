@@ -657,9 +657,9 @@ function getInputs(){
   // Keep selections from inactive media types in the UI, but only export
   // categories belonging to the currently enabled content types.
   const activeTypes=new Set(types);
-  const selectedOptions=[...($('categorySelect')?.selectedOptions||[])]
-    .filter(o=>o.value&&activeTypes.has((o.dataset.mediaType||'').toLowerCase()));
-  const categoryIds=selectedOptions.map(o=>({id:o.value,mediaType:o.dataset.mediaType||''}));
+  const categoryIds=[...rememberedCategorySelections]
+    .map(key=>{const split=key.indexOf('::');return {mediaType:key.slice(0,split),id:key.slice(split+2)};})
+    .filter(c=>activeTypes.has(c.mediaType));
   const categoryTypes=[...new Set(categoryIds.map(c=>c.mediaType).filter(Boolean))];
   const effectiveTypes=categoryIds.length?categoryTypes:types;
   return{portal,mac,epg,types:effectiveTypes,maxPages,skipKnown,categoryIds};
@@ -759,27 +759,44 @@ function renderInspector(data){
 function selectedContentTypes(){
   return ['live','vod','series'].filter(t=>$(t==='live'?'chkLive':t==='vod'?'chkVod':'chkSeries')?.checked);
 }
+// Keep category choices independently of the browser's <option hidden> behavior.
+const rememberedCategorySelections = new Set();
+function categoryKey(option){
+  return `${(option.dataset.mediaType||'').toLowerCase()}::${option.value}`;
+}
+function rememberVisibleCategorySelections(){
+  const sel=$('categorySelect');
+  if(!sel)return;
+  [...sel.options].forEach(o=>{
+    if(o.selected && o.value) rememberedCategorySelections.add(categoryKey(o));
+    else if(!o.hidden && o.value) rememberedCategorySelections.delete(categoryKey(o));
+  });
+}
 function refreshCategoryTypeVisibility(){
   const allowed=new Set(selectedContentTypes()),sel=$('categorySelect');
   if(!sel)return;
+  // First capture current choices, then restore choices for the newly visible type.
+  rememberVisibleCategorySelections();
   [...sel.options].forEach(o=>{
     const type=(o.dataset.mediaType||'').toLowerCase();
     o.hidden=!!type&&!allowed.has(type);
-    // Preserve the selected state while switching between Live, VOD and Series.
+    if(o.hidden) o.selected=false;
+    else o.selected=rememberedCategorySelections.has(categoryKey(o));
   });
   updateCategorySelectionUI();
 }
 function updateCategorySelectionUI(){
   const sel=$('categorySelect'),btn=$('allCategoriesBtn');
   if(!sel||!btn)return;
-  const chosen=[...sel.selectedOptions].filter(o=>o.value),allMode=chosen.length===0;
+  const chosen=[...sel.selectedOptions].filter(o=>o.value&&!o.hidden),allMode=chosen.length===0;
   btn.classList.toggle('active',allMode);
   btn.setAttribute('aria-pressed',String(allMode));
   btn.querySelector('.all-category-mark').textContent=allMode?'✓':'＋';
   $('categoryHelpText').textContent=allMode?'All categories are included. Choose specific categories below to create a focused playlist.':`${chosen.length} categories selected.`;
 }
-$('categorySelect')?.addEventListener('change',updateCategorySelectionUI);
+$('categorySelect')?.addEventListener('change',()=>{rememberVisibleCategorySelections();updateCategorySelectionUI();});
 $('allCategoriesBtn')?.addEventListener('click',()=>{
+  rememberedCategorySelections.clear();
   [...$('categorySelect').options].forEach(o=>o.selected=false);
   updateCategorySelectionUI();
 });
@@ -794,7 +811,7 @@ $('loadCategoriesBtn').addEventListener('click', async () => {
   try{
     const res=await fetch('/api/convert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({portal,mac,types,format:'categories'})});
     const data=await res.json(); if(!res.ok||!data.ok) throw new Error(data.error||'Could not load categories');
-    const sel=$('categorySelect'); sel.innerHTML=''; 
+    const sel=$('categorySelect'); rememberedCategorySelections.clear(); sel.innerHTML=''; 
     for(const cat of (data.categories||[])){
       const opt=document.createElement('option'); opt.value=cat.id; opt.dataset.mediaType=cat.mediaType;
       opt.textContent=`${cat.name} (${cat.mediaType.toUpperCase()})`; sel.appendChild(opt);
