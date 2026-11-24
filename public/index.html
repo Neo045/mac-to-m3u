@@ -301,12 +301,18 @@ tr:hover td{background:var(--surf2)}
     </div>
   </div>
   <div class="field">
-    <label>Max Pages per type &mdash; <span id="pagesVal" style="color:var(--primary);font-family:'JetBrains Mono',monospace">50</span></label>
-    <div class="range-row">
-      <span style="font-size:12px;color:var(--faint)">1</span>
-      <input type="range" id="pages" min="1" max="500" value="50">
-      <span style="font-size:12px;color:var(--faint)">500</span>
+    <label for="categorySelect">Category extraction <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-inspect" type="button" id="loadCategoriesBtn" style="white-space:nowrap">Load Categories</button>
+      <select id="categorySelect" disabled style="flex:1;min-width:0;padding:11px;border:1px solid var(--border);border-radius:9px;background:var(--surf2);color:var(--text)">
+        <option value="">All categories</option>
+      </select>
     </div>
+    <p class="hint">Load categories after entering Portal URL and MAC. Select one category to export only its channels.</p>
+  </div>
+  <div class="field">
+    <label>Pagination</label>
+    <div style="font-size:13px;color:var(--muted);padding:9px 0">Automatic — fetches pages until the portal has no more results.</div>
   </div>
   <div class="recheck-toggle">
     <input type="checkbox" id="recheckChk">
@@ -503,8 +509,8 @@ tr:hover td{background:var(--surf2)}
 </div>
 
 <footer class="footer">
-  <a href="https://shihabrahmanprofile.blogspot.com/" target="_blank" rel="noopener">stalker-to-m3u</a>
-  &nbsp;·&nbsp; Stalker/MAC → M3U converter
+  <a href="https://github.com/SamoTech/stalker-to-m3u" target="_blank" rel="noopener">stalker-to-m3u</a>
+  &nbsp;·&nbsp; Stalker/Ministra → M3U converter
 </footer>
 
 <!-- HLS.js and Dash.js via CDN -->
@@ -534,11 +540,6 @@ macInput.addEventListener('input', () => {
   macInput.value = formatted;
   macInput.setSelectionRange(Math.min(pos,formatted.length),Math.min(pos,formatted.length));
 });
-
-// ── Pages slider ──────────────────────────────────────────────────────────────
-const pagesInput = document.getElementById('pages');
-const pagesValEl = document.getElementById('pagesVal');
-pagesInput.addEventListener('input', () => pagesValEl.textContent = pagesInput.value);
 
 // ── Validate sliders ──────────────────────────────────────────────────────────
 const timeoutRange = document.getElementById('timeoutRange');
@@ -612,9 +613,13 @@ function getInputs(){
   const mac=$('mac').value.trim();
   const epg=$('epg').value.trim();
   const types=[$('chkLive').checked&&'live',$('chkVod').checked&&'vod',$('chkSeries').checked&&'series'].filter(Boolean);
-  const maxPages=parseInt(pagesInput.value)||50;
+  const maxPages=10000; // safety ceiling; pagination stops on an empty page
   const skipKnown=recheckChk.checked?($('recheckM3u').value||''):'';
-  return{portal,mac,epg,types,maxPages,skipKnown};
+  const selectedCategory=$('categorySelect')?.value||'';
+  const selectedOption=selectedCategory?$('categorySelect').selectedOptions[0]:null;
+  const categoryType=selectedOption?.dataset.mediaType||'';
+  const effectiveTypes=selectedCategory&&categoryType?[categoryType]:types;
+  return{portal,mac,epg,types:effectiveTypes,maxPages,skipKnown,categoryId:selectedCategory,categoryType};
 }
 function validateInputs(){
   const{portal,mac,types}=getInputs();
@@ -707,10 +712,33 @@ function renderInspector(data){
   });
 });
 
+// ── Load portal categories ────────────────────────────────────────────────────
+$('loadCategoriesBtn').addEventListener('click', async () => {
+  const {portal,mac,types}=getInputs();
+  if(!portal || !mac || !/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(mac)){
+    setStatus('Enter a valid Portal URL and MAC address first.','err'); return;
+  }
+  if(!types.length){setStatus('Select a content type first.','err');return;}
+  const btn=$('loadCategoriesBtn'); btn.disabled=true; btn.textContent='Loading…';
+  try{
+    const res=await fetch('/api/convert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({portal,mac,types,format:'categories'})});
+    const data=await res.json(); if(!res.ok||!data.ok) throw new Error(data.error||'Could not load categories');
+    const sel=$('categorySelect'); sel.innerHTML='<option value="">All categories</option>';
+    for(const cat of (data.categories||[])){
+      const opt=document.createElement('option'); opt.value=cat.id; opt.dataset.mediaType=cat.mediaType;
+      opt.textContent=`${cat.name} (${cat.mediaType.toUpperCase()})`; sel.appendChild(opt);
+    }
+    sel.disabled=false; setStatus(`Loaded ${data.categories?.length||0} categories. Select one to extract only that category.`,'ok');
+    log(`Loaded ${data.categories?.length||0} portal categories.`,'ok');
+  }catch(e){setStatus(`Category loading failed: ${e.message}`,'err');log(e.message,'err');}
+  finally{btn.disabled=false;btn.textContent='Load Categories';}
+});
+
 // ── Convert (NDJSON streaming) ────────────────────────────────────────────────
 $('convertBtn').addEventListener('click', async () => {
   if(!validateInputs()) return;
-  const{portal,mac,epg,types,maxPages,skipKnown}=getInputs();
+  const{portal,mac,epg,types,skipKnown,categoryId,categoryType}=getInputs();
+  const maxPages=10000; // backend safety ceiling; normal stopping is an empty portal page.
 
   m3uData=null; filteredM3u=null; lastChannels=[];
   $('saveBtn').disabled=true;
@@ -728,7 +756,7 @@ $('convertBtn').addEventListener('click', async () => {
   log(`Portal  : ${portal}`,'info');
   log(`MAC     : ${mac}`,'info');
   log(`Types   : ${types.join(', ')}`,'info');
-  log(`Pages   : ${maxPages} per type`,'info');
+  log('Pages   : automatic (until portal has no more results)','info');
   if(skipKnown) log('Re-check: diff mode \u2014 skipping existing URLs','warn');
   log('','info');
 
@@ -737,7 +765,7 @@ $('convertBtn').addEventListener('click', async () => {
     const res = await fetch('/api/convert',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({portal,mac,types,maxPages,epgUrl:epg,format:'json',skipKnown}),
+      body:JSON.stringify({portal,mac,types,maxPages,epgUrl:epg,format:'json',skipKnown,categoryId,categoryType}),
       signal:abortCtrl.signal,
     });
     if(!res.ok){
@@ -751,7 +779,7 @@ $('convertBtn').addEventListener('click', async () => {
     const decoder = new TextDecoder();
     let buf  = '';
     let count = 0;
-    let estimatedTotal = Math.max(types.length * maxPages * 20, 20);
+    let estimatedTotal = Math.max(types.length * 20, 20);
     let doneEvt = null;
 
     outer: while(true){
@@ -768,7 +796,7 @@ $('convertBtn').addEventListener('click', async () => {
 
         switch(evt.event){
           case 'meta':
-            estimatedTotal = Math.max(estimatedTotal, evt.types.length * evt.maxPages * 20, 20);
+            estimatedTotal = Math.max(estimatedTotal, evt.types.length * 20, 20);
             break;
           case 'profile':{
             const p = evt.profile || {};
