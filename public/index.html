@@ -63,6 +63,15 @@ input[type=range]{flex:1;accent-color:var(--primary);height:4px;cursor:pointer}
 .category-load:active{transform:translateY(0)}
 .category-load .cat-icon{font-size:17px;line-height:1}
 .category-select-wrap{position:relative}
+.all-category-card{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:13px 14px;border:1px solid color-mix(in oklch,var(--primary) 38%,var(--border));border-radius:11px;background:linear-gradient(115deg,color-mix(in oklch,var(--primary) 17%,var(--surf2)),color-mix(in oklch,var(--primary) 5%,var(--surf)));color:var(--text);text-align:left;cursor:pointer;transition:all .18s}
+.all-category-card:hover{border-color:var(--primary);transform:translateY(-1px)}
+.all-category-card.active{border-color:var(--primary);box-shadow:0 0 0 2px color-mix(in oklch,var(--primary) 15%,transparent),0 5px 16px color-mix(in oklch,var(--primary) 12%,transparent)}
+.all-category-copy{display:flex;flex-direction:column;gap:3px}
+.all-category-title{font-size:13px;font-weight:700}
+.all-category-sub{font-size:10px;color:var(--muted)}
+.all-category-mark{width:23px;height:23px;display:grid;place-items:center;border-radius:7px;background:var(--surf2);border:1px solid var(--border);color:var(--muted);flex:0 0 auto}
+.all-category-card.active .all-category-mark{background:var(--primary);border-color:var(--primary);color:#fff}
+
 .category-select-wrap:after{display:none;content:'⌄';position:absolute;right:15px;top:50%;transform:translateY(-58%);font-size:19px;color:var(--primary);pointer-events:none}
 #categorySelect{min-height:140px;appearance:none;-webkit-appearance:none;width:100%;min-height:48px;padding:0 42px 0 13px!important;border:1px solid var(--border);border-radius:10px;background:var(--entry);color:var(--text);font:500 13px 'Inter',sans-serif;outline:none;transition:border-color .18s,box-shadow .18s;cursor:pointer}
 #categorySelect:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-dim)}
@@ -330,10 +339,12 @@ tr:hover td{background:var(--surf2)}
       <button class="btn category-load" type="button" id="loadCategoriesBtn">
         <span class="cat-icon" aria-hidden="true">▦</span><span>Load categories</span>
       </button>
+      <button type="button" id="allCategoriesBtn" class="all-category-card active" aria-pressed="true" disabled>
+        <span class="all-category-copy"><span class="all-category-title">✦ All Categories</span><span class="all-category-sub">Include every available category in one playlist</span></span>
+        <span class="all-category-mark" aria-hidden="true">✓</span>
+      </button>
       <div class="category-select-wrap">
-        <select id="categorySelect" disabled multiple aria-label="Choose one or more categories">
-          <option value="">All categories</option>
-        </select>
+        <select id="categorySelect" disabled multiple aria-label="Choose one or more categories"></select>
       </div>
     </div>
     <p class="category-help"><span class="help-icon" aria-hidden="true">ⓘ</span><span id="categoryHelpText">Enter your Portal URL and MAC, then load categories. Choose one or more categories to export only their channels, or keep “All categories”.</span></p>
@@ -741,16 +752,34 @@ function renderInspector(data){
 });
 
 // ── Load portal categories ────────────────────────────────────────────────────
-$('categorySelect')?.addEventListener('change',e=>{
-  const sel=e.currentTarget, all=[...sel.options].find(o=>o.value==='');
-  const chosen=[...sel.selectedOptions];
-  if(chosen.some(o=>o.value==='')) {
-    [...sel.options].forEach(o=>{if(o.value!=='')o.selected=false;});
-    if(all) all.selected=true;
-  } else if(all) all.selected=false;
-  const n=[...sel.selectedOptions].filter(o=>o.value).length;
-  $('categoryHelpText').textContent=n?`${n} categories selected. Their channels will be combined into one playlist.`:'No category filter selected; all categories will be included.';
+function selectedContentTypes(){
+  return ['live','vod','series'].filter(t=>$(t==='live'?'chkLive':t==='vod'?'chkVod':'chkSeries')?.checked);
+}
+function refreshCategoryTypeVisibility(){
+  const allowed=new Set(selectedContentTypes()),sel=$('categorySelect');
+  if(!sel)return;
+  [...sel.options].forEach(o=>{
+    const type=(o.dataset.mediaType||'').toLowerCase();
+    o.hidden=!!type&&!allowed.has(type);
+    if(o.hidden)o.selected=false;
+  });
+  updateCategorySelectionUI();
+}
+function updateCategorySelectionUI(){
+  const sel=$('categorySelect'),btn=$('allCategoriesBtn');
+  if(!sel||!btn)return;
+  const chosen=[...sel.selectedOptions].filter(o=>o.value),allMode=chosen.length===0;
+  btn.classList.toggle('active',allMode);
+  btn.setAttribute('aria-pressed',String(allMode));
+  btn.querySelector('.all-category-mark').textContent=allMode?'✓':'＋';
+  $('categoryHelpText').textContent=allMode?'All categories are included. Choose specific categories below to create a focused playlist.':`${chosen.length} categories selected.`;
+}
+$('categorySelect')?.addEventListener('change',updateCategorySelectionUI);
+$('allCategoriesBtn')?.addEventListener('click',()=>{
+  [...$('categorySelect').options].forEach(o=>o.selected=false);
+  updateCategorySelectionUI();
 });
+['chkLive','chkVod','chkSeries'].forEach(id=>$(id)?.addEventListener('change',refreshCategoryTypeVisibility));
 $('loadCategoriesBtn').addEventListener('click', async () => {
   const {portal,mac,types}=getInputs();
   if(!portal || !mac || !/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(mac)){
@@ -761,12 +790,12 @@ $('loadCategoriesBtn').addEventListener('click', async () => {
   try{
     const res=await fetch('/api/convert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({portal,mac,types,format:'categories'})});
     const data=await res.json(); if(!res.ok||!data.ok) throw new Error(data.error||'Could not load categories');
-    const sel=$('categorySelect'); sel.innerHTML='<option value="">All categories</option>'; 
+    const sel=$('categorySelect'); sel.innerHTML=''; 
     for(const cat of (data.categories||[])){
       const opt=document.createElement('option'); opt.value=cat.id; opt.dataset.mediaType=cat.mediaType;
       opt.textContent=`${cat.name} (${cat.mediaType.toUpperCase()})`; sel.appendChild(opt);
     }
-    sel.disabled=false; const count=data.categories?.length||0; $('categoryHelpText').textContent=count?`${count} categories loaded. Select multiple categories (Ctrl/⌘ or tap) to combine them. Keep “All categories” for everything.`:'No categories were returned by this portal.'; setStatus(`Loaded ${count} categories. You can select multiple categories.`,'ok');
+    sel.disabled=false; $('allCategoriesBtn').disabled=false; refreshCategoryTypeVisibility(); const count=data.categories?.length||0; $('categoryHelpText').textContent=count?`${count} categories loaded. Choose a content type to filter the list, then select multiple categories if needed.`:'No categories were returned by this portal.'; setStatus(`Loaded ${count} categories. You can select multiple categories.`,'ok');
     log(`Loaded ${data.categories?.length||0} portal categories.`,'ok');
   }catch(e){setStatus(`Category loading failed: ${e.message}`,'err');log(e.message,'err');}
   finally{btn.disabled=false;btn.innerHTML='<span class="cat-icon" aria-hidden="true">▦</span><span>Load categories</span>';}
