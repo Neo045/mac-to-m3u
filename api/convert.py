@@ -6,7 +6,7 @@ POST /api/convert
     portal      : str   required  http://HOST:PORT
     mac         : str   required  00:1A:79:XX:XX:XX
     types       : list  optional  ["live","vod","series"]  default ["live"]
-    maxPages    : int   optional  default 50
+    maxPages    : int   internal safety ceiling (automatic pagination by default)
     epgUrl      : str   optional
     format      : str   optional  "m3u" | "json"           default "m3u"
     skipKnown   : str   optional  existing M3U text; channels whose URLs already
@@ -155,10 +155,10 @@ def clean_cmd(cmd):
         return sanitize_url(m.group(1))
     return cmd
 
-def fetch_page(base, mac, token, media_type, page):
+def fetch_page(base, mac, token, media_type, page, genre="*"):
     t = {"live": "itv", "vod": "vod", "series": "series"}.get(media_type, "itv")
     url = portal_url(base, "get_ordered_list",
-        type=t, genre="*",
+        type=t, genre=(str(genre) if genre not in (None, "", "*") else "*"),
         force_ch_link_check=0, fav=0, sortby="number", hd=0,
         p=page, JsHttpRequest=f"{int(time.time() * 1000)}-xml")
     js = http_get(url, build_headers(mac, token)).get("js", {})
@@ -205,15 +205,19 @@ def build_channel(ch, genres, media_type, base, mac, token, known_urls, fallback
         "media_type":  media_type,
     }
 
-def fetch_all(base, mac, token, media_type, max_pages=50, known_urls=None):
+def fetch_all(base, mac, token, media_type, max_pages=50, known_urls=None, genre="*"):
     """Buffered fetch — used by format=m3u path."""
     genres     = fetch_genres(base, mac, token, media_type)
     channels, seen, total = [], set(), None
     known_urls = known_urls or set()
 
-    for page in range(1, max_pages + 1):
+    # Auto-paginate until the portal returns an empty page. max_pages is retained
+    # only as a hard safety ceiling for malformed portals that never terminate.
+    page = 1
+    page_limit = max(1, min(int(max_pages or 10000), 10000))
+    while page <= page_limit:
         try:
-            items, total_items = fetch_page(base, mac, token, media_type, page)
+            items, total_items = fetch_page(base, mac, token, media_type, page, genre)
         except Exception:
             break
         if total is None and total_items:
@@ -228,8 +232,7 @@ def fetch_all(base, mac, token, media_type, max_pages=50, known_urls=None):
             built = build_channel(ch, genres, media_type, base, mac, token, known_urls, len(channels) + 1)
             if built:
                 channels.append(built)
-        if total and len(channels) >= total:
-            break
+        page += 1
 
     return channels
 
@@ -317,10 +320,13 @@ class handler(BaseHTTPRequestHandler):
         portal     = (payload.get("portal")    or "").strip().rstrip("/")
         mac        = (payload.get("mac")       or "").strip()
         types      = payload.get("types")      or ["live"]
-        max_pgs    = int(payload.get("maxPages") or 50)
+        # Automatic pagination; 10,000 is a safety ceiling, not a user-facing cap.
+        max_pgs    = 10000
         epg_url    = (payload.get("epgUrl")    or "").strip()
         fmt        = (payload.get("format")    or "m3u").lower()
         skip_known = (payload.get("skipKnown") or "").strip()
+        category_id = payload.get("categoryId")
+        category_type = payload.get("categoryType")
 
         if not portal or not mac:
             return self.send_json(400, {"error": "Missing required fields: portal, mac"})
@@ -334,6 +340,23 @@ class handler(BaseHTTPRequestHandler):
         except Exception as e:
             return self.send_json(502, {"error": f"Handshake failed: {e}"})
 
+        if fmt == "categories":
+            requested_types = payload.get("types") or ["live"]
+            categories = []
+            for mt in requested_types:
+                try:
+                    action = "get_genres" if mt == "live" else "get_categories"
+                    portal_type = {"live": "itv", "vod": "vod", "series": "series"}.get(mt, "itv")
+                    raw = http_get(portal_url(portal, action, type=portal_type), build_headers(mac, token)).get("js") or []
+                    if isinstance(raw, dict):
+                        raw = list(raw.values())
+                    for item in raw:
+                        if item.get("id") is not None:
+                            categories.append({"id": str(item.get("id")), "name": str(item.get("title") or item.get("name") or "Untitled"), "mediaType": mt})
+                except Exception:
+                    continue
+            return self.send_json(200, {"ok": True, "categories": categories})
+
         profile = {}
         try:
             profile = get_profile(portal, mac, token)
@@ -345,7 +368,7 @@ class handler(BaseHTTPRequestHandler):
             all_channels, errors = [], []
             for t in types:
                 try:
-                    all_channels.extend(fetch_all(portal, mac, token, t, max_pgs, known_urls))
+                    all_channels.extend(fetch_all(portal, mac, token, t, max_pgs, known_urls, category_id if category_type == t else "*"))
                 except Exception as e:
                     errors.append(f"{t}: {e}")
             if not all_channels and errors:
@@ -366,17 +389,18 @@ class handler(BaseHTTPRequestHandler):
 
         sent   = 0
         errors = []
-        # Seed estimate: types × maxPages × ~20 channels/page
-        estimated_total = max(len(types) * max_pgs * 20, 20)
+        # Seed estimate; the portal's actual total refines this as pages arrive.
+        estimated_total = max(len(types) * 20, 20)
 
         for media_type in types:
             genres    = fetch_genres(portal, mac, token, media_type)
             seen      = set()
             type_sent = 0
 
-            for page in range(1, max_pgs + 1):
+            page = 1
+            while page <= max_pgs:
                 try:
-                    items, total_items = fetch_page(portal, mac, token, media_type, page)
+                    items, total_items = fetch_page(portal, mac, token, media_type, page, category_id if category_type == media_type else "*")
                 except Exception as e:
                     err_msg = str(e)
                     errors.append(f"{media_type} p{page}: {err_msg}")
@@ -413,6 +437,12 @@ class handler(BaseHTTPRequestHandler):
                     "estimatedTotal": estimated_total,
                     "done":           False,
                 })
+                page += 1
+
+            if page > max_pgs:
+                msg = f"Safety limit reached at {max_pgs} pages for {media_type}; results may be incomplete."
+                errors.append(msg)
+                self.emit({"event": "error", "scope": media_type, "message": msg, "page": page - 1})
 
             # Signal end-of-type
             self.emit({
