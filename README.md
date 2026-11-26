@@ -156,7 +156,7 @@ python stalker_to_m3u.py --portal http://HOST:PORT --mac 00:1A:79:XX:XX:XX \
 | `--mac` | *(required)* | MAC address (`00:1A:79:XX:XX:XX`) |
 | `--types` | `live` | `live`, `vod`, `series` |
 | `--max-pages` | `50` | Max pages per type |
-| `--output` | `shihab_playlist.m3u` | Output file |
+| `--output` | `playlist.m3u` | Output file |
 | `--epg` | *(empty)* | EPG URL for M3U header |
 | `--timeout` | `15` | Request timeout (seconds) |
 | `--verbose` / `-v` | off | Per-page progress |

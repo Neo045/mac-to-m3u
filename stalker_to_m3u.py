@@ -661,7 +661,7 @@ def launch_gui():
         path = filedialog.asksaveasfilename(
             defaultextension=".m3u",
             filetypes=[("M3U Playlist", "*.m3u"), ("All files", "*.*")],
-            initialfile="shihab_playlist.m3u",
+            initialfile="playlist.m3u",
             title="Save M3U playlist",
         )
         if not path:
@@ -706,7 +706,7 @@ def run_cli():
     parser.add_argument("--types",     nargs="+", default=["live"],
                         choices=["live","vod","series"])
     parser.add_argument("--max-pages", type=int, default=50)
-    parser.add_argument("--output",    default="shihab_playlist.m3u")
+    parser.add_argument("--output",    default="playlist.m3u")
     parser.add_argument("--epg",       default="")
     parser.add_argument("--timeout",   type=int, default=15)
     parser.add_argument("--verbose",   "-v", action="store_true")
