@@ -305,18 +305,32 @@ tr:hover td{background:var(--surf2)}
 <body>
 
 <header class="header">
-  <div class="logo">Stalker <span>→ M3U</span></div>
+  <div class="logo">MAC / Xtream <span>→ M3U</span></div>
   <button class="theme-btn" id="themeBtn" aria-label="Toggle theme">☀️ Light</button>
 </header>
 
 <div class="card">
+  <div class="field">
+    <label>Connection Mode</label>
+    <div class="checks" role="group" aria-label="Connection mode">
+      <label><input type="radio" name="connectionMode" id="modeStalker" value="stalker" checked> Stalker (MAC)</label>
+      <label><input type="radio" name="connectionMode" id="modeXtream" value="xtream"> Xtream Codes</label>
+    </div>
+  </div>
+  <div id="stalkerFields">
   <div class="field">
     <label for="portal">Portal URL</label>
     <input type="url" id="portal" placeholder="http://provider.com:8080" autocomplete="off" spellcheck="false">
   </div>
   <div class="field">
     <label for="mac">MAC Address</label>
-    <input type="text" id="mac" placeholder="00:1A:79:XX:XX:XX" maxlength="17" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" inputmode="text">
+    <input type="text" id="mac" placeholder="00:1A:79:XX:XX:XX" maxlength="17" autocomplete="off" spellcheck="false">
+  </div>
+  </div>
+  <div id="xtreamFields" style="display:none">
+    <div class="field"><label for="xtreamServer">Server URL</label><input type="url" id="xtreamServer" placeholder="http://provider.com:8080" autocomplete="off"></div>
+    <div class="field"><label for="xtreamUser">Username</label><input type="text" id="xtreamUser" autocomplete="off"></div>
+    <div class="field"><label for="xtreamPass">Password</label><input type="password" id="xtreamPass" autocomplete="off"></div>
   </div>
   <div class="field">
     <label for="epg">EPG URL <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
@@ -567,50 +581,17 @@ themeBtn.addEventListener('click', () => {
   themeBtn.textContent = dark ? '\u2600\ufe0f Light' : '\uD83C\uDF19 Dark';
 });
 
-// ── MAC auto-format (cursor-aware typing, editing and paste) ──────────────────
+// ── MAC auto-format ───────────────────────────────────────────────────────────
 const macInput = document.getElementById('mac');
-function macHexBefore(value, position) {
-  return (value.slice(0, position).match(/[0-9a-f]/gi) || []).length;
-}
-function formatMacInput(value) {
-  const hex = value.replace(/[^0-9a-f]/gi, '').slice(0, 12).toUpperCase();
-  return hex.match(/.{1,2}/g)?.join(':') || '';
-}
-function macCaretPosition(formatted, hexCount) {
-  if (hexCount <= 0) return 0;
-  let seen = 0;
-  for (let i = 0; i < formatted.length; i++) {
-    if (/[0-9A-F]/.test(formatted[i]) && ++seen === hexCount) return i + 1;
-  }
-  return formatted.length;
-}
 macInput.addEventListener('input', () => {
-  const oldValue = macInput.value;
-  const start = macInput.selectionStart ?? oldValue.length;
-  const end = macInput.selectionEnd ?? start;
-  const startHex = macHexBefore(oldValue, start);
-  const endHex = macHexBefore(oldValue, end);
-  const formatted = formatMacInput(oldValue);
+  let raw = macInput.value.replace(/[^0-9A-Fa-f]/g,'');
+  if (raw.length > 12) raw = raw.slice(0,12);
+  let parts = [];
+  for (let i=0;i<raw.length;i+=2) parts.push(raw.slice(i,i+2));
+  const formatted = parts.join(':');
+  const pos = macInput.selectionStart;
   macInput.value = formatted;
-  const nextStart = macCaretPosition(formatted, startHex);
-  const nextEnd = macCaretPosition(formatted, endHex);
-  macInput.setSelectionRange(nextStart, nextEnd);
-});
-// Backspace immediately after a separator deletes the previous hex digit,
-// rather than appearing to do nothing because the colon is auto-inserted.
-macInput.addEventListener('keydown', event => {
-  const start = macInput.selectionStart;
-  const end = macInput.selectionEnd;
-  if (event.key !== 'Backspace' || start !== end || start < 1 || macInput.value[start - 1] !== ':') return;
-  event.preventDefault();
-  const hexBefore = macHexBefore(macInput.value, start) - 1;
-  const raw = macInput.value.replace(/[^0-9a-f]/gi, '');
-  const nextRaw = raw.slice(0, Math.max(0, hexBefore)) + raw.slice(Math.max(0, hexBefore) + 1);
-  const formatted = formatMacInput(nextRaw);
-  macInput.value = formatted;
-  const caret = macCaretPosition(formatted, Math.max(0, hexBefore));
-  macInput.setSelectionRange(caret, caret);
-  macInput.dispatchEvent(new Event('input', { bubbles: true }));
+  macInput.setSelectionRange(Math.min(pos,formatted.length),Math.min(pos,formatted.length));
 });
 
 // ── Validate sliders ──────────────────────────────────────────────────────────
@@ -680,29 +661,41 @@ function setProgress(pct){
 }
 
 // ── Inputs ────────────────────────────────────────────────────────────────────
+function connectionMode(){ return $('modeXtream')?.checked ? 'xtream' : 'stalker'; }
+function refreshConnectionMode(){
+  const xt=connectionMode()==='xtream';
+  $('stalkerFields').style.display=xt?'none':'block';
+  $('xtreamFields').style.display=xt?'block':'none';
+  $('testBtn').textContent=xt?'🔎  Test Xtream Login':'🔎  Inspect Portal';
+  $('categoryHelpText').textContent=xt?'Enter Xtream server credentials, then load categories.':'Enter your Portal URL and MAC, then load categories.';
+}
+['modeStalker','modeXtream'].forEach(id=>$(id).addEventListener('change',refreshConnectionMode));
+refreshConnectionMode();
 function getInputs(){
+  const mode=connectionMode();
   const portal=$('portal').value.trim().replace(/\/+$/,'');
   const mac=$('mac').value.trim();
+  const server=$('xtreamServer').value.trim().replace(/\/+$/,'');
+  const username=$('xtreamUser').value.trim(),password=$('xtreamPass').value;
   const epg=$('epg').value.trim();
   const types=[$('chkLive').checked&&'live',$('chkVod').checked&&'vod',$('chkSeries').checked&&'series'].filter(Boolean);
-  const maxPages=10000; // safety ceiling; pagination stops on an empty page
+  const maxPages=10000;
   const skipKnown=recheckChk.checked?($('recheckM3u').value||''):'';
-  // Keep selections from inactive media types in the UI, but only export
-  // categories belonging to the currently enabled content types.
   const activeTypes=new Set(types);
-  const categoryIds=[...rememberedCategorySelections]
-    .map(key=>{const split=key.indexOf('::');return {mediaType:key.slice(0,split),id:key.slice(split+2)};})
-    .filter(c=>activeTypes.has(c.mediaType));
-  const categoryTypes=[...new Set(categoryIds.map(c=>c.mediaType).filter(Boolean))];
-  const effectiveTypes=categoryIds.length?categoryTypes:types;
-  return{portal,mac,epg,types:effectiveTypes,maxPages,skipKnown,categoryIds};
+  const categoryIds=[...rememberedCategorySelections].map(key=>{const parts=key.split('::');return {mode:parts[0],mediaType:parts[1],id:parts.slice(2).join('::')};}).filter(c=>c.mode===mode&&activeTypes.has(c.mediaType));
+  return{mode,portal,mac,server,username,password,epg,types,maxPages,skipKnown,categoryIds};
 }
 function validateInputs(){
-  const{portal,mac,types}=getInputs();
-  if(!portal){setStatus('\u26a0 Portal URL is required.','err');return false;}
-  if(!mac){setStatus('\u26a0 MAC address is required.','err');return false;}
-  if(!/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(mac)){setStatus('\u26a0 Invalid MAC format.','err');return false;}
-  if(!types.length){setStatus('\u26a0 Select at least one content type.','err');return false;}
+  const v=getInputs();
+  if(!v.types.length){setStatus('⚠ Select at least one content type.','err');return false;}
+  if(v.mode==='xtream'){
+    if(!v.server||!v.username||!v.password){setStatus('⚠ Server URL, username and password are required.','err');return false;}
+    try{new URL(v.server);}catch(_){setStatus('⚠ Invalid Xtream server URL.','err');return false;}
+  }else{
+    if(!v.portal){setStatus('⚠ Portal URL is required.','err');return false;}
+    if(!v.mac){setStatus('⚠ MAC address is required.','err');return false;}
+    if(!/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(v.mac)){setStatus('⚠ Invalid MAC format.','err');return false;}
+  }
   return true;
 }
 
@@ -795,7 +788,7 @@ function selectedContentTypes(){
 // Keep category choices independently of the browser's <option hidden> behavior.
 const rememberedCategorySelections = new Set();
 function categoryKey(option){
-  return `${(option.dataset.mediaType||'').toLowerCase()}::${option.value}`;
+  return `${connectionMode()}::${(option.dataset.mediaType||'').toLowerCase()}::${option.value}`;
 }
 function rememberVisibleCategorySelections(){
   const sel=$('categorySelect');
@@ -829,22 +822,20 @@ function updateCategorySelectionUI(){
 }
 $('categorySelect')?.addEventListener('change',()=>{rememberVisibleCategorySelections();updateCategorySelectionUI();});
 $('allCategoriesBtn')?.addEventListener('click',()=>{
-  rememberedCategorySelections.clear();
+  [...rememberedCategorySelections].forEach(k=>{if(k.startsWith(connectionMode()+'::'))rememberedCategorySelections.delete(k);});
   [...$('categorySelect').options].forEach(o=>o.selected=false);
   updateCategorySelectionUI();
 });
 ['chkLive','chkVod','chkSeries'].forEach(id=>$(id)?.addEventListener('change',refreshCategoryTypeVisibility));
 $('loadCategoriesBtn').addEventListener('click', async () => {
-  const {portal,mac,types}=getInputs();
-  if(!portal || !mac || !/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(mac)){
-    setStatus('Enter a valid Portal URL and MAC address first.','err'); return;
-  }
+  const v=getInputs(); const {portal,mac,types}=v;
+  if(v.mode==='xtream' ? (!v.server||!v.username||!v.password) : (!portal||!mac||!/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(mac))){setStatus(v.mode==='xtream'?'Enter Server URL, username and password first.':'Enter a valid Portal URL and MAC address first.','err');return;}
   if(!types.length){setStatus('Select a content type first.','err');return;}
   const btn=$('loadCategoriesBtn'); btn.disabled=true; btn.textContent='Loading…';
   try{
-    const res=await fetch('/api/convert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({portal,mac,types,format:'categories'})});
+    const res=await fetch('/api/convert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(v.mode==='xtream'?{mode:'xtream',server:v.server,username:v.username,password:v.password,types,format:'categories'}:{portal,mac,types,format:'categories'})});
     const data=await res.json(); if(!res.ok||!data.ok) throw new Error(data.error||'Could not load categories');
-    const sel=$('categorySelect'); rememberedCategorySelections.clear(); sel.innerHTML=''; 
+    const sel=$('categorySelect'); [...rememberedCategorySelections].forEach(k=>{if(k.startsWith(connectionMode()+'::'))rememberedCategorySelections.delete(k);}); sel.innerHTML=''; 
     for(const cat of (data.categories||[])){
       const opt=document.createElement('option'); opt.value=cat.id; opt.dataset.mediaType=cat.mediaType;
       opt.textContent=`${cat.name} (${cat.mediaType.toUpperCase()})`; sel.appendChild(opt);
@@ -858,7 +849,7 @@ $('loadCategoriesBtn').addEventListener('click', async () => {
 // ── Convert (NDJSON streaming) ────────────────────────────────────────────────
 $('convertBtn').addEventListener('click', async () => {
   if(!validateInputs()) return;
-  const{portal,mac,epg,types,skipKnown,categoryIds}=getInputs();
+  const{mode,portal,mac,server,username,password,epg,types,skipKnown,categoryIds}=getInputs();
   const maxPages=10000; // backend safety ceiling; normal stopping is an empty portal page.
 
   m3uData=null; filteredM3u=null; lastChannels=[];
@@ -874,8 +865,8 @@ $('convertBtn').addEventListener('click', async () => {
   setProgress(3);
   setStatus('Connecting\u2026');
 
-  log(`Portal  : ${portal}`,'info');
-  log(`MAC     : ${mac}`,'info');
+  if(mode==='xtream') log(`Xtream  : ${server}  ·  ${username}`,'info');
+  else { log(`Portal  : ${portal}`,'info'); log(`MAC     : ${mac}`,'info'); }
   log(`Types   : ${types.join(', ')}`,'info');
   log('Pages   : automatic (until portal has no more results)','info');
   if(skipKnown) log('Re-check: diff mode \u2014 skipping existing URLs','warn');
@@ -886,7 +877,7 @@ $('convertBtn').addEventListener('click', async () => {
     const res = await fetch('/api/convert',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({portal,mac,types,maxPages,epgUrl:epg,format:'json',skipKnown,categoryIds}),
+      body:JSON.stringify(mode==='xtream'?{mode:'xtream',server,username,password,types,maxPages,epgUrl:epg,format:'json',skipKnown,categoryIds}:{portal,mac,types,maxPages,epgUrl:epg,format:'json',skipKnown,categoryIds}),
       signal:abortCtrl.signal,
     });
     if(!res.ok){
@@ -993,6 +984,7 @@ $('cancelBtn').addEventListener('click',()=>{
 
 // ── Inspect Portal ────────────────────────────────────────────────────────────
 $('testBtn').addEventListener('click', async () => {
+  if(connectionMode()==='xtream'){ const v=getInputs(); if(!v.server||!v.username||!v.password){setStatus('Enter Xtream credentials first.','err');return;} setStatus('Testing Xtream login…'); try{const r=await fetch('/api/convert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'xtream',server:v.server,username:v.username,password:v.password,types:['live'],format:'categories'})});const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'Login failed');setStatus('✓ Xtream login successful. Categories: '+d.categories.length,'ok');log('Xtream authentication successful.','ok');}catch(e){setStatus('Xtream login failed: '+e.message,'err');log(e.message,'err');}return;}
   const portal = $('portal').value.trim().replace(/\/+$/,'');
   const mac    = $('mac').value.trim();
   if(!portal){ setStatus('\u26a0 Enter a portal URL first.','err'); return; }
