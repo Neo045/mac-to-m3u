@@ -280,7 +280,7 @@ class handler(BaseHTTPRequestHandler):
         body = content.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/x-mpegurl; charset=utf-8")
-        self.send_header("Content-Disposition", 'attachment; filename="playlist.m3u"')
+        self.send_header("Content-Disposition", 'attachment; filename="shihab_playlist.m3u"')
         self.send_header("Content-Length", str(len(body)))
         self._cors()
         self.end_headers()
