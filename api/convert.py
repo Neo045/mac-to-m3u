@@ -258,6 +258,27 @@ def build_m3u(channels, epg_url=""):
 
 # ── Vercel handler ─────────────────────────────────────────────────────────────
 
+def xtream_api(server, username, password, action=None, extra=None):
+    params = {"username": username, "password": password}
+    if action: params["action"] = action
+    if extra: params.update(extra)
+    url = server.rstrip("/") + "/player_api.php?" + urlencode(params)
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=25) as response:
+        return json.loads(response.read().decode("utf-8", errors="replace"))
+
+def xtream_categories(server, username, password, media_type):
+    action = {"live":"get_live_categories", "vod":"get_vod_categories", "series":"get_series_categories"}[media_type]
+    data = xtream_api(server, username, password, action)
+    return [{"id":str(x.get("category_id")),"name":str(x.get("category_name") or "Uncategorized"),"mediaType":media_type} for x in data if x.get("category_id") is not None]
+
+def xtream_stream_url(server, username, password, media_type, item):
+    ident = item.get("stream_id") or item.get("series_id") or item.get("id")
+    ext = item.get("container_extension") or ("ts" if media_type == "live" else "mp4")
+    path = {"live":"live", "vod":"movie"}.get(media_type)
+    if path: return f"{server.rstrip('/')}/{path}/{urllib.parse.quote(username)}/{urllib.parse.quote(password)}/{ident}.{ext}"
+    return ""
+
 class handler(BaseHTTPRequestHandler):
 
     def log_message(self, *a): pass
@@ -280,7 +301,7 @@ class handler(BaseHTTPRequestHandler):
         body = content.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/x-mpegurl; charset=utf-8")
-        self.send_header("Content-Disposition", 'attachment; filename="shihab_playlist.m3u"')
+        self.send_header("Content-Disposition", 'attachment; filename="playlist.m3u"')
         self.send_header("Content-Length", str(len(body)))
         self._cors()
         self.end_headers()
@@ -316,6 +337,65 @@ class handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length))
         except Exception:
             return self.send_json(400, {"error": "Invalid JSON body"})
+
+        if (payload.get("mode") or "stalker") == "xtream":
+            server=(payload.get("server") or "").strip().rstrip("/")
+            username=(payload.get("username") or "").strip()
+            password=payload.get("password") or ""
+            requested=payload.get("types") or ["live"]
+            fmt=(payload.get("format") or "m3u").lower()
+            epg_url=(payload.get("epgUrl") or "").strip()
+            category_ids=payload.get("categoryIds") or []
+            selected={}
+            for c in category_ids:
+                if isinstance(c,dict) and c.get("id") is not None: selected.setdefault(str(c.get("mediaType") or ""),set()).add(str(c["id"]))
+            if not server or not username or not password: return self.send_json(400,{"error":"Missing Xtream server URL, username or password"})
+            try:
+                auth=xtream_api(server,username,password)
+                user_info=auth.get("user_info") or {}
+                if str(user_info.get("auth", "1")) == "0": raise RuntimeError("Authentication rejected by server")
+            except Exception as e: return self.send_json(502,{"error":f"Xtream login failed: {e}"})
+            if fmt=="categories":
+                cats=[]
+                for mt in requested:
+                    if mt in ("live","vod","series"):
+                        try: cats.extend(xtream_categories(server,username,password,mt))
+                        except Exception: pass
+                return self.send_json(200,{"ok":True,"categories":cats,"user_info":user_info})
+            known=extract_known_urls((payload.get("skipKnown") or "").strip())
+            if fmt!="json":
+                return self.send_json(400,{"error":"Use streaming conversion from the web interface"})
+            self.start_ndjson()
+            self.emit({"event":"meta","portal":server,"types":requested,"maxPages":10000,"epgUrl":epg_url,"knownUrls":len(known)})
+            self.emit({"event":"profile","profile":{"tariff_plan":user_info.get("username"),"end_date":user_info.get("exp_date")}})
+            sent=0; errors=[]
+            actions={"live":"get_live_streams","vod":"get_vod_streams","series":"get_series"}
+            for mt in requested:
+                try:
+                    items=xtream_api(server,username,password,actions[mt])
+                    if not isinstance(items,list): items=[]
+                    filtered=[x for x in items if not selected.get(mt) or str(x.get("category_id") or "") in selected[mt]]
+                    for item in filtered:
+                        if mt=="series":
+                            sid=item.get("series_id") or item.get("id")
+                            info=xtream_api(server,username,password,"get_series_info",{"series_id":sid})
+                            episodes=info.get("episodes") or {}
+                            for season_eps in episodes.values():
+                                for ep in season_eps:
+                                    eid=ep.get("id"); ext=ep.get("container_extension") or "mp4"
+                                    url=f"{server}/series/{urllib.parse.quote(username)}/{urllib.parse.quote(password)}/{eid}.{ext}"
+                                    if url in known: continue
+                                    sent+=1; self.emit({"event":"channel","count":sent,"channel":{"name":ep.get("title") or item.get("name") or "Episode","logo":item.get("cover") or "","group":item.get("name") or "Series","number":sent,"stream_url":url,"epg_id":"","raw_cmd":url,"uncheckable":False,"stream_type":"video","media_type":"series"}})
+                        else:
+                            url=xtream_stream_url(server,username,password,mt,item)
+                            if not url or url in known: continue
+                            sent+=1
+                            self.emit({"event":"channel","count":sent,"channel":{"name":item.get("name") or "Unknown","logo":item.get("stream_icon") or item.get("cover") or "","group":item.get("category_name") or "Uncategorized","number":item.get("num") or sent,"stream_url":url,"epg_id":item.get("epg_channel_id") or "","raw_cmd":url,"uncheckable":False,"stream_type":"video","media_type":mt}})
+                    self.emit({"event":"progress","scope":mt,"page":1,"count":sent,"typeCount":sent,"estimatedTotal":max(sent,len(filtered)),"done":True})
+                except Exception as e:
+                    errors.append(f"{mt}: {e}"); self.emit({"event":"error","scope":mt,"message":str(e),"page":1})
+            self.emit({"event":"done","total":sent,"errors":errors,"profile":{},"epgUrl":epg_url})
+            return
 
         portal     = (payload.get("portal")    or "").strip().rstrip("/")
         mac        = (payload.get("mac")       or "").strip()
